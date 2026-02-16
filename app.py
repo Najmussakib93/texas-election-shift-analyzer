@@ -1,4 +1,5 @@
 import json
+import os
 import pandas as pd
 import streamlit as st
 import plotly.express as px
@@ -26,9 +27,10 @@ def inject_css():
     st.markdown(
         """
 <style>
-.block-container { padding-top: 1.1rem; padding-bottom: 1.2rem; }
+.block-container { padding-top: 0.8rem; padding-bottom: 1.2rem; }
 div[data-testid="stVerticalBlock"] { gap: 0.75rem; }
 
+/* Dark hero header */
 .tt-card{
   background: linear-gradient(180deg, #0f172a 0%, #020617 100%);
   border: 1px solid rgba(255,255,255,0.08);
@@ -36,20 +38,6 @@ div[data-testid="stVerticalBlock"] { gap: 0.75rem; }
   padding: 18px 20px;
   margin-bottom: 6px;
 }
-
-.tt-title{
-  font-size: 1.6rem;
-  font-weight: 800;
-  color: white;
-  margin: 0;
-}
-
-.tt-sub{
-  color: rgba(255,255,255,0.65);
-  margin-top: 4px;
-  font-size: 0.95rem;
-}
-
 .tt-card::before{
   content: "";
   display: block;
@@ -57,6 +45,17 @@ div[data-testid="stVerticalBlock"] { gap: 0.75rem; }
   background: linear-gradient(90deg, #2A71AE, #B82D35);
   border-radius: 10px;
   margin-bottom: 10px;
+}
+.tt-title{
+  font-size: 1.6rem;
+  font-weight: 800;
+  color: white;
+  margin: 0;
+}
+.tt-sub{
+  color: rgba(255,255,255,0.65);
+  margin-top: 4px;
+  font-size: 0.95rem;
 }
 
 .tt-dark{
@@ -151,17 +150,14 @@ def load_and_standardize_tx() -> pd.DataFrame:
     for c in ["votes_dem", "votes_gop", "total_votes", "per_dem", "per_gop", "per_point_diff"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # Always keep FIPS as 5-digit strings
     df["county_fips"] = df["county_fips"].astype(str).str.zfill(5)
-
     return df
 
 
 @st.cache_data(show_spinner=False)
 def load_tx_geojson(path: str):
     """
-    Robust normalization:
-    ensures each feature has:
+    Ensures:
       - feature["id"] as 5-digit string FIPS
       - feature["properties"]["geoid"] as 5-digit string FIPS
     """
@@ -183,6 +179,19 @@ def load_tx_geojson(path: str):
         feat["properties"]["geoid"] = geoid
 
     return geo
+
+
+# ----------------------------
+# Cache year slice + lookup (performance)
+# ----------------------------
+@st.cache_data(show_spinner=False)
+def year_slice_and_lookup(df: pd.DataFrame, year: int):
+    d = df[df["year"] == year].copy()
+    d["county_fips"] = d["county_fips"].astype(str).str.zfill(5)
+    lookup = d.set_index("county_fips")[
+        ["per_dem", "per_gop", "per_point_diff", "total_votes", "county_name", "votes_dem", "votes_gop"]
+    ].to_dict("index")
+    return d, lookup
 
 
 # ----------------------------
@@ -213,7 +222,7 @@ def make_statewide_stats(df: pd.DataFrame) -> dict:
 # ----------------------------
 def render_vote_share_bar(dem_votes: float, gop_votes: float, total_votes: float, title_html: str):
     other_votes = max(0.0, total_votes - dem_votes - gop_votes)
-    if total_votes <= 0:
+    if not total_votes or total_votes <= 0:
         st.warning("No vote totals available.")
         return
 
@@ -281,6 +290,7 @@ def render_statewide_bars(df: pd.DataFrame, year: int):
     dem_votes = float(d["votes_dem"].sum())
     gop_votes = float(d["votes_gop"].sum())
     total_votes = float(d["total_votes"].sum())
+
     title = f"<b>Two Parties. Texas’s Vote.</b><br><span style='font-size:14px'>Texas vote share — {year}</span>"
     render_vote_share_bar(dem_votes, gop_votes, total_votes, title)
 
@@ -296,7 +306,7 @@ def render_county_bars(df: pd.DataFrame, county_fips: str, year: int):
 
 
 # ----------------------------
-# Optional product-style snapshot row
+# Snapshot cards
 # ----------------------------
 def texas_snapshot_cards(df: pd.DataFrame):
     d24 = df[df["year"] == 2024].copy()
@@ -333,11 +343,11 @@ st.markdown(
 
 df = load_and_standardize_tx()
 
-# Session state for map selection
+# Session state
 if "selected_fips" not in st.session_state:
     st.session_state.selected_fips = None
 
-# Sidebar controls
+# Sidebar
 st.sidebar.markdown("## Controls")
 year = st.sidebar.selectbox("Year", [2016, 2020, 2024], index=2)
 
@@ -360,22 +370,19 @@ try:
 except FileNotFoundError:
     st.error(
         "Texas map disabled: missing `data/texas_counties.geojson`.\n\n"
-        "Run `create_texas_geojson.py` after downloading `data/us_counties.geojson`."
+        "Run `create_texas_geojson.py` to generate it."
     )
     st.stop()
 
-# Prepare year slice
-d_year = df[df["year"] == year].copy()
-d_year["county_fips"] = d_year["county_fips"].astype(str).str.zfill(5)
+# Cached year slice + lookup
+d_year, lookup = year_slice_and_lookup(df, year)
 
-# Selected county name (for UI)
+# Selected county name
 selected_name = "None"
-if st.session_state.selected_fips:
-    sr = d_year[d_year["county_fips"] == st.session_state.selected_fips]
-    if not sr.empty:
-        selected_name = sr.iloc[0]["county_name"]
+if st.session_state.selected_fips and st.session_state.selected_fips in lookup:
+    selected_name = lookup[st.session_state.selected_fips]["county_name"]
 
-# Scoreboard row
+# Scoreboard
 dem_wins = int((d_year["per_dem"] > d_year["per_gop"]).sum())
 gop_wins = int((d_year["per_gop"] >= d_year["per_dem"]).sum())
 
@@ -385,19 +392,12 @@ c2.metric("🟥 GOP counties", gop_wins)
 c3.metric("Selected county", selected_name)
 
 # ----------------------------
-# Map section (Winner / Margin / Votes) + Hover + Click selection (FIXED)
+# Map section (Winner/Margin/Votes) + hover + click
+# Winner mode has multiple traces, so we click using trace.locations[pn]
 # ----------------------------
-
-# Prep
-d_year = df[df["year"] == year].copy()
-d_year["county_fips"] = d_year["county_fips"].astype(str).str.zfill(5)
-d_year["selected"] = (d_year["county_fips"] == st.session_state.selected_fips).astype(int)
-
-# Map build
 if metric == "Winner (Red/Blue)":
-    d_year["winner"] = (d_year["per_dem"] > d_year["per_gop"]).map(
-        {True: "Democratic", False: "Republican"}
-    )
+    d_year = d_year.copy()
+    d_year["winner"] = (d_year["per_dem"] > d_year["per_gop"]).map({True: "Democratic", False: "Republican"})
 
     fig_map = px.choropleth(
         d_year,
@@ -423,7 +423,7 @@ elif metric == "Margin (Red↔Blue)":
     fig_map.update_layout(coloraxis=dict(cmid=0))
     fig_map.update_layout(coloraxis_colorbar=dict(title="Margin (GOP − DEM)", len=0.75))
 
-else:  # Total votes
+else:
     fig_map = px.choropleth(
         d_year,
         geojson=geo,
@@ -434,12 +434,8 @@ else:  # Total votes
     )
     fig_map.update_layout(coloraxis_colorbar=dict(title="Votes", len=0.75))
 
-# ---- Build a lookup dict for fast per-FIPS data (used for hover + selection outline) ----
-lookup = d_year.set_index("county_fips")[["per_dem", "per_gop", "per_point_diff", "total_votes", "county_name"]].to_dict("index")
-
-# ---- Attach customdata PER TRACE (aligned to each trace.locations) ----
+# Per-trace hover + outline (fast enough; no AI calls here)
 for trace in fig_map.data:
-    # Only apply to choropleth traces
     if getattr(trace, "type", None) != "choropleth":
         continue
 
@@ -448,13 +444,15 @@ for trace in fig_map.data:
     else:
         locs = [str(x).zfill(5) for x in list(trace.locations)]
 
-    # customdata = [per_dem, per_gop, per_point_diff, total_votes, county_fips]
     per_trace_customdata = []
     hovertext = []
+
     for f in locs:
         row = lookup.get(f)
         if row:
-            per_trace_customdata.append([row["per_dem"], row["per_gop"], row["per_point_diff"], row["total_votes"], f])
+            per_trace_customdata.append(
+                [row["per_dem"], row["per_gop"], row["per_point_diff"], row["total_votes"], f]
+            )
             hovertext.append(row["county_name"])
         else:
             per_trace_customdata.append([None, None, None, None, f])
@@ -472,16 +470,13 @@ for trace in fig_map.data:
         "<extra></extra>"
     )
 
-    # Selection outline: thicken border for selected county on that trace
     selected_fips = st.session_state.selected_fips
     trace.marker.line.width = [2.2 if (selected_fips and f == selected_fips) else 0.35 for f in locs]
     trace.marker.line.color = "white"
 
-# Layout
 fig_map.update_geos(fitbounds="locations", visible=False)
 fig_map.update_layout(margin=dict(l=0, r=0, t=10, b=0), height=560)
 
-# ---- Click handling (FIXED): use trace.locations[pn] so Winner mode selects correct county ----
 clicked = plotly_events(
     fig_map,
     click_event=True,
@@ -490,6 +485,7 @@ clicked = plotly_events(
     key=f"tx_map_{metric}_{year}",
 )
 
+# Click selection (NO st.rerun)
 if clicked:
     ev = clicked[-1]
     curve = ev.get("curveNumber", 0)
@@ -497,16 +493,12 @@ if clicked:
 
     if pn is not None and curve < len(fig_map.data):
         trace = fig_map.data[curve]
-        if trace.locations is None:
-            locs = []
-        else:
-            locs = [str(x).zfill(5) for x in list(trace.locations)]
-        if 0 <= pn < len(locs):
-            loc = str(locs[pn]).zfill(5)
-
-            if loc in lookup and st.session_state.selected_fips != loc:
-                st.session_state.selected_fips = loc
-                st.rerun()
+        if trace.locations is not None:
+            locs = list(trace.locations)
+            if 0 <= pn < len(locs):
+                loc = str(locs[pn]).zfill(5)
+                if loc in lookup and st.session_state.selected_fips != loc:
+                    st.session_state.selected_fips = loc
 
 
 # ----------------------------
@@ -515,6 +507,7 @@ if clicked:
 st.markdown("")
 _dark_panel_open()
 
+# Bar chart changes based on selection
 if st.session_state.selected_fips:
     render_county_bars(df, st.session_state.selected_fips, year)
 else:
@@ -522,14 +515,20 @@ else:
 
 st.markdown("<h3 style='margin:6px 0 0 0;'>Quick insight</h3>", unsafe_allow_html=True)
 
+# Insight changes based on selection
 if st.session_state.selected_fips:
-    county_all_years = df[df["county_fips"] == st.session_state.selected_fips].sort_values("year")
+    county_fips = st.session_state.selected_fips
+    county_all_years = df[df["county_fips"] == county_fips].sort_values("year")
     county_name = county_all_years.iloc[0]["county_name"]
 
     if use_ai:
-        summary = build_county_summary(county_all_years)
-        summary_json = json.dumps(summary, sort_keys=True)
-        st.markdown(cached_gpt_quick_insight_json(county_name, summary_json))
+        # AI is now explicit to avoid blocking/hanging
+        if st.button("Generate AI insight", key=f"ai_{county_fips}_{year}"):
+            summary = build_county_summary(county_all_years)
+            summary_json = json.dumps(summary, sort_keys=True)
+            st.markdown(cached_gpt_quick_insight_json(county_name, summary_json))
+        else:
+            st.caption("AI is enabled. Click “Generate AI insight” to run GPT.")
     else:
         d16 = county_all_years[county_all_years["year"] == 2016].iloc[0]
         d24 = county_all_years[county_all_years["year"] == 2024].iloc[0]
@@ -538,10 +537,14 @@ if st.session_state.selected_fips:
         st.markdown(f"From 2016 to 2024, **{county_name} shifted {abs(shift):.1f} points {direction}**.")
 else:
     if use_ai:
-        stats_json = json.dumps(make_statewide_stats(df), sort_keys=True)
-        st.markdown(cached_gpt_statewide_summary_json(stats_json))
+        if st.button("Generate AI statewide summary", key=f"ai_state_{year}"):
+            stats_json = json.dumps(make_statewide_stats(df), sort_keys=True)
+            st.markdown(cached_gpt_statewide_summary_json(stats_json))
+        else:
+            st.caption("AI is enabled. Click “Generate AI statewide summary” to run GPT.")
     else:
         st.markdown("Click a county to see a county-specific insight. (AI disabled.)")
 
 _dark_panel_close()
+
 st.caption("Tip: Hover to view county stats. Click a county to lock selection and update the bar + insight.")
