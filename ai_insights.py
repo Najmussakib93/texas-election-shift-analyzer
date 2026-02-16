@@ -2,6 +2,7 @@ import json
 import os
 import streamlit as st
 from openai import OpenAI
+from typing import Optional
 
 
 @st.cache_data(show_spinner=False)
@@ -20,7 +21,7 @@ def build_county_summary(d) -> dict:
     }
 
 
-def _get_client() -> OpenAI | None:
+def _get_client() -> Optional[OpenAI]:
     api_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY", None)
     if not api_key:
         return None
