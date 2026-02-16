@@ -1,6 +1,6 @@
 streamlit
 pandas
 plotly
+pydeck
 openai
 python-dotenv
-streamlit-plotly-events

@@ -1,10 +1,8 @@
 import json
 import pandas as pd
 import streamlit as st
-import plotly.express as px
 import plotly.graph_objects as go
-
-from streamlit_plotly_events import plotly_events
+import pydeck as pdk
 
 from ai_insights import (
     build_county_summary,
@@ -15,7 +13,6 @@ from ai_insights import (
 DATA_2016 = "data/2016.csv"
 DATA_2020 = "data/2020.csv"
 DATA_2024 = "data/2024.csv"
-
 TX_GEOJSON_PATH = "data/texas_counties.geojson"
 
 
@@ -26,8 +23,8 @@ def inject_css():
     st.markdown(
         """
 <style>
+/* Reduce padding */
 .block-container { padding-top: 0.8rem; padding-bottom: 1.2rem; }
-div[data-testid="stVerticalBlock"] { gap: 0.75rem; }
 
 /* Dark hero header */
 .tt-card{
@@ -57,13 +54,19 @@ div[data-testid="stVerticalBlock"] { gap: 0.75rem; }
   font-size: 0.95rem;
 }
 
+/* Dark panel for bar + insight */
 .tt-dark{
   background:#0f1115;
   border:1px solid rgba(255,255,255,0.08);
   border-radius:14px;
   padding:14px 14px 6px 14px;
 }
-.tt-dark h3, .tt-dark p, .tt-dark li { color: #fff; }
+.tt-dark h3, .tt-dark p, .tt-dark li, .tt-dark span { color: #fff; }
+
+/* Make Streamlit top chrome feel consistent */
+header[data-testid="stHeader"] {
+  background: #020617;
+}
 </style>
 """,
         unsafe_allow_html=True,
@@ -154,7 +157,7 @@ def load_and_standardize_tx() -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
-def load_tx_geojson(path: str):
+def load_tx_geojson(path: str) -> dict:
     """Normalize GeoJSON ids so feature['id'] is 5-digit TX county FIPS."""
     with open(path, "r", encoding="utf-8") as f:
         geo = json.load(f)
@@ -163,27 +166,104 @@ def load_tx_geojson(path: str):
         if "properties" not in feat or feat["properties"] is None:
             feat["properties"] = {}
 
-        geoid = feat["properties"].get("geoid")
-        if not geoid:
-            geoid = feat.get("id")
-
+        geoid = feat["properties"].get("geoid") or feat.get("id")
         if geoid is not None:
             geoid = str(geoid).zfill(5)
 
         feat["id"] = geoid
         feat["properties"]["geoid"] = geoid
 
+        # Keep a clean display name if present
+        if "name" not in feat["properties"]:
+            # some sources store NAME
+            if "NAME" in feat["properties"]:
+                feat["properties"]["name"] = feat["properties"]["NAME"]
+
     return geo
 
 
-# ----------------------------
-# Cache year slice (performance)
-# ----------------------------
+@st.cache_data(show_spinner=False)
+def geojson_to_df(geo: dict) -> pd.DataFrame:
+    """Turn GeoJSON features into a DF for Pydeck GeoJsonLayer."""
+    rows = []
+    for feat in geo.get("features", []):
+        props = feat.get("properties", {}) or {}
+        fips = str(feat.get("id") or props.get("geoid") or "").zfill(5)
+        rows.append(
+            {
+                "county_fips": fips,
+                "geojson": feat,  # each row is a feature
+                "county_name_geo": props.get("name", ""),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 @st.cache_data(show_spinner=False)
 def year_slice(df: pd.DataFrame, year: int) -> pd.DataFrame:
     d = df[df["year"] == year].copy()
     d["county_fips"] = d["county_fips"].astype(str).str.zfill(5)
     return d
+
+
+# ----------------------------
+# Color helpers (Pydeck uses RGBA arrays)
+# ----------------------------
+def clamp01(x: float) -> float:
+    return max(0.0, min(1.0, x))
+
+
+def lerp(a: float, b: float, t: float) -> float:
+    return a + (b - a) * t
+
+
+def lerp_rgb(c1, c2, t: float):
+    return [int(lerp(c1[i], c2[i], t)) for i in range(3)]
+
+
+# Tribune-ish palette
+BLUE = [42, 113, 174]
+RED = [184, 45, 53]
+WHITE = [247, 247, 247]
+
+
+def margin_to_rgba(margin: float, alpha: int = 180) -> list[int]:
+    """
+    margin = GOP - DEM (positive => red, negative => blue)
+    Map margins roughly into [-30, +30] then interpolate.
+    """
+    if margin is None or pd.isna(margin):
+        return [120, 120, 120, 80]
+
+    # normalize with soft clamp
+    m = float(margin)
+    m = max(-30.0, min(30.0, m))
+    if m < 0:
+        t = clamp01(abs(m) / 30.0)
+        rgb = lerp_rgb(WHITE, BLUE, t)
+    else:
+        t = clamp01(m / 30.0)
+        rgb = lerp_rgb(WHITE, RED, t)
+    return [rgb[0], rgb[1], rgb[2], alpha]
+
+
+def votes_to_rgba(votes: float, vmin: float, vmax: float, alpha: int = 180) -> list[int]:
+    """
+    Sequential scale: light -> dark.
+    """
+    if votes is None or pd.isna(votes):
+        return [120, 120, 120, 80]
+
+    if vmax <= vmin:
+        t = 0.5
+    else:
+        t = clamp01((float(votes) - vmin) / (vmax - vmin))
+
+    # light gray to near-white-blue-ish (keeps dark UI legible)
+    low = [220, 230, 240]
+    high = [40, 70, 100]
+    rgb = lerp_rgb(low, high, t)
+    return [rgb[0], rgb[1], rgb[2], alpha]
 
 
 # ----------------------------
@@ -210,7 +290,7 @@ def make_statewide_stats(df: pd.DataFrame) -> dict:
 
 
 # ----------------------------
-# Tribune-style stacked bars
+# Tribune-style stacked bars (Plotly)
 # ----------------------------
 def render_vote_share_bar(dem_votes: float, gop_votes: float, total_votes: float, title_html: str):
     other_votes = max(0.0, total_votes - dem_votes - gop_votes)
@@ -318,6 +398,41 @@ def texas_snapshot_cards(df: pd.DataFrame):
 
 
 # ----------------------------
+# Build Pydeck map dataframe
+# ----------------------------
+@st.cache_data(show_spinner=False)
+def build_map_df(geo_df: pd.DataFrame, d_year: pd.DataFrame) -> pd.DataFrame:
+    keep = d_year[
+        ["county_fips", "county_name", "per_dem", "per_gop", "per_point_diff", "total_votes", "votes_dem", "votes_gop"]
+    ].copy()
+
+    out = geo_df.merge(keep, on="county_fips", how="left")
+
+    # fill missing names from election file if needed
+    out["county_name"] = out["county_name"].fillna(out["county_name_geo"])
+
+    # ensure numeric for tooltip
+    for c in ["per_dem", "per_gop", "per_point_diff", "total_votes", "votes_dem", "votes_gop"]:
+        out[c] = pd.to_numeric(out[c], errors="coerce")
+
+    return out
+
+
+def make_fill_colors(map_df: pd.DataFrame, style: str) -> pd.Series:
+    if style == "Winner (Red/Blue)":
+        winner = (map_df["per_dem"] > map_df["per_gop"])
+        return winner.apply(lambda x: [BLUE[0], BLUE[1], BLUE[2], 180] if bool(x) else [RED[0], RED[1], RED[2], 180])
+
+    if style == "Margin (Red↔Blue)":
+        return map_df["per_point_diff"].apply(lambda m: margin_to_rgba(m, 190))
+
+    # Total votes
+    vmin = float(map_df["total_votes"].min(skipna=True)) if map_df["total_votes"].notna().any() else 0.0
+    vmax = float(map_df["total_votes"].max(skipna=True)) if map_df["total_votes"].notna().any() else 1.0
+    return map_df["total_votes"].apply(lambda v: votes_to_rgba(v, vmin, vmax, 190))
+
+
+# ----------------------------
 # Main App
 # ----------------------------
 st.set_page_config(page_title="Texas Election Map + Insights", layout="wide")
@@ -327,7 +442,7 @@ st.markdown(
     """
 <div class="tt-card">
   <div class="tt-title">Texas Election Shift Analyzer</div>
-  <div class="tt-sub">Hover for county stats. Click a county to lock selection and update the bar + insight.</div>
+  <div class="tt-sub">Fast map (Pydeck) + vote-share bars (Plotly) + optional GPT insight.</div>
 </div>
 """,
     unsafe_allow_html=True,
@@ -342,40 +457,53 @@ if "selected_fips" not in st.session_state:
 st.sidebar.markdown("## Controls")
 year = st.sidebar.selectbox("Year", [2016, 2020, 2024], index=2)
 
-metric = st.sidebar.selectbox(
+map_style = st.sidebar.selectbox(
     "Map style",
     ["Winner (Red/Blue)", "Margin (Red↔Blue)", "Total votes (Turnout)"],
     index=0,
 )
 
+use_ai = st.sidebar.checkbox("Enable AI insights", value=True)
+
 if st.sidebar.button("Clear selected county"):
     st.session_state.selected_fips = None
 
-use_ai = st.sidebar.checkbox("Enable AI insights", value=True)
-
 texas_snapshot_cards(df)
 
-# GeoJSON
+# Load geojson
 try:
-    geo = load_tx_geojson(TX_GEOJSON_PATH)
+    tx_geo = load_tx_geojson(TX_GEOJSON_PATH)
 except FileNotFoundError:
     st.error(
-        "Texas map disabled: missing `data/texas_counties.geojson`.\n\n"
+        "Missing `data/texas_counties.geojson`.\n\n"
         "Run `create_texas_geojson.py` to generate it."
     )
     st.stop()
 
-# Year slice
+geo_df = geojson_to_df(tx_geo)
 d_year = year_slice(df, year)
+map_df = build_map_df(geo_df, d_year)
 
-# Selected name
+# County search + select (locks the panel)
+st.sidebar.markdown("---")
+st.sidebar.markdown("### Find your county")
+search = st.sidebar.text_input("Type a county name", value="")
+counties = sorted([c for c in map_df["county_name"].dropna().unique()])
+
+filtered = [c for c in counties if search.lower() in c.lower()] if search else counties
+picked = st.sidebar.selectbox("Select county (locks bar + insight)", ["(None)"] + filtered)
+
+if picked != "(None)":
+    picked_fips = map_df.loc[map_df["county_name"] == picked, "county_fips"].iloc[0]
+    st.session_state.selected_fips = picked_fips
+
+# Scoreboard row
 selected_name = "None"
 if st.session_state.selected_fips:
-    sr = d_year[d_year["county_fips"] == st.session_state.selected_fips]
-    if not sr.empty:
-        selected_name = sr.iloc[0]["county_name"]
+    rr = map_df[map_df["county_fips"] == st.session_state.selected_fips]
+    if not rr.empty:
+        selected_name = rr.iloc[0]["county_name"]
 
-# Scoreboard
 dem_wins = int((d_year["per_dem"] > d_year["per_gop"]).sum())
 gop_wins = int((d_year["per_gop"] >= d_year["per_dem"]).sum())
 
@@ -385,131 +513,46 @@ c2.metric("🟥 GOP counties", gop_wins)
 c3.metric("Selected county", selected_name)
 
 # ----------------------------
-# Map (robust hover + click)
+# Pydeck Map
 # ----------------------------
-hover_data_common = {
-    "per_dem": ":.1f",
-    "per_gop": ":.1f",
-    "per_point_diff": ":.1f",
-    "total_votes": ":,",
-    "county_fips": True,
+# Add fill color column (fast)
+map_df = map_df.copy()
+map_df["fill_rgba"] = make_fill_colors(map_df, map_style)
+
+tooltip = {
+    "html": """
+<b>{county_name}</b><br/>
+FIPS: {county_fips}<br/><br/>
+Dem %: {per_dem}<br/>
+GOP %: {per_gop}<br/>
+Margin (GOP − DEM): {per_point_diff}<br/>
+Total votes: {total_votes}
+""",
+    "style": {"backgroundColor": "rgba(0,0,0,0.9)", "color": "white"},
 }
 
-if metric == "Winner (Red/Blue)":
-    d_map = d_year.copy()
-    d_map["winner_code"] = (d_map["per_dem"] > d_map["per_gop"]).astype(int)  # 1=Dem, 0=GOP
-
-    fig_map = px.choropleth(
-        d_map,
-        geojson=geo,
-        locations="county_fips",
-        featureidkey="id",
-        color="winner_code",
-        hover_name="county_name",
-        hover_data={**hover_data_common, "winner_code": False},
-        custom_data=["county_fips"],  # << ensure county_fips is carried into points
-        color_continuous_scale=["#B82D35", "#2A71AE"],
-        range_color=(0, 1),
-    )
-    fig_map.update_layout(coloraxis_showscale=False)
-
-elif metric == "Margin (Red↔Blue)":
-    fig_map = px.choropleth(
-        d_year,
-        geojson=geo,
-        locations="county_fips",
-        featureidkey="id",
-        color="per_point_diff",
-        hover_name="county_name",
-        hover_data=hover_data_common,
-        custom_data=["county_fips"],
-        color_continuous_scale=["#2A71AE", "#BFDCEB", "#F7F7F7", "#FACCB4", "#B82D35"],
-    )
-    fig_map.update_layout(coloraxis=dict(cmid=0))
-    fig_map.update_layout(coloraxis_colorbar=dict(title="Margin (GOP − DEM)", len=0.75))
-
-else:
-    fig_map = px.choropleth(
-        d_year,
-        geojson=geo,
-        locations="county_fips",
-        featureidkey="id",
-        color="total_votes",
-        hover_name="county_name",
-        hover_data=hover_data_common,
-        custom_data=["county_fips"],
-    )
-    fig_map.update_layout(coloraxis_colorbar=dict(title="Votes", len=0.75))
-
-# Light outline
-fig_map.update_traces(marker_line_width=0.35, marker_line_color="white")
-
-# IMPORTANT: force a hovertemplate that references customdata
-# This makes Plotly keep customdata on the points consistently.
-fig_map.update_traces(
-    hovertemplate=(
-        "<b>%{hovertext}</b><br><br>"
-        "County FIPS: %{customdata[0]}<br>"
-        "Dem %: %{customdata[1]:.1f}<br>"
-        "GOP %: %{customdata[2]:.1f}<br>"
-        "Margin (GOP − DEM): %{customdata[3]:.1f}<br>"
-        "Total votes: %{customdata[4]:,.0f}"
-        "<extra></extra>"
-    )
+layer = pdk.Layer(
+    "GeoJsonLayer",
+    data=map_df,
+    get_geojson="geojson",
+    pickable=True,
+    auto_highlight=True,
+    get_fill_color="fill_rgba",
+    get_line_color=[255, 255, 255, 70],
+    line_width_min_pixels=0.6,
 )
 
-# To match the hovertemplate fields above, pack customdata in this order:
-# [county_fips, per_dem, per_gop, per_point_diff, total_votes]
-# (still compact; 254 counties only)
-fig_map.update_traces(
-    customdata=d_year[["county_fips", "per_dem", "per_gop", "per_point_diff", "total_votes"]].to_numpy()
+# Texas view
+view_state = pdk.ViewState(latitude=31.0, longitude=-99.0, zoom=5.2)
+
+deck = pdk.Deck(
+    layers=[layer],
+    initial_view_state=view_state,
+    tooltip=tooltip,
+    map_style=None,  # no basemap (clean Tribune-style)
 )
 
-fig_map.update_geos(fitbounds="locations", visible=False)
-fig_map.update_layout(margin=dict(l=0, r=0, t=10, b=0), height=560)
-
-clicked = plotly_events(
-    fig_map,
-    click_event=True,
-    hover_event=False,
-    select_event=False,
-    key=f"tx_map_{metric}_{year}",
-)
-
-# Click selection (robust: customdata -> location -> pointNumber mapping)
-if clicked:
-    ev = clicked[-1]
-
-    loc = None
-
-    # 1) Preferred: customdata[0] is county_fips
-    cd = ev.get("customdata")
-    if cd is not None:
-        # cd can be list or scalar depending on versions
-        if isinstance(cd, (list, tuple)) and len(cd) > 0:
-            loc = cd[0]
-        elif isinstance(cd, str):
-            loc = cd
-
-    # 2) Fallback: some versions provide "location"
-    if loc is None:
-        loc = ev.get("location")
-
-    # 3) Final fallback: use curveNumber + pointNumber into trace.locations
-    if loc is None:
-        curve = ev.get("curveNumber", 0)
-        pn = ev.get("pointNumber", None)
-        if pn is not None and curve < len(fig_map.data):
-            tr = fig_map.data[curve]
-            if getattr(tr, "locations", None) is not None:
-                locs = list(tr.locations)
-                if 0 <= pn < len(locs):
-                    loc = locs[pn]
-
-    if loc is not None:
-        loc = str(loc).split(".")[0].zfill(5)
-        if st.session_state.selected_fips != loc:
-            st.session_state.selected_fips = loc
+st.pydeck_chart(deck, use_container_width=True)
 
 # ----------------------------
 # Bars + Insight region
@@ -550,8 +593,8 @@ else:
         else:
             st.caption("AI is enabled. Click “Generate AI statewide summary” to run GPT.")
     else:
-        st.markdown("Click a county to see a county-specific insight. (AI disabled.)")
+        st.markdown("Select a county to see a county-specific insight. (AI disabled.)")
 
 _dark_panel_close()
 
-st.caption("Tip: Hover to view county stats. Click a county to lock selection and update the bar + insight.")
+st.caption("Tip: Hover counties for stats. Use the sidebar county search to lock the selection for bars + insight.")

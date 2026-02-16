@@ -1,15 +1,15 @@
-import os
 import json
+import os
 import streamlit as st
-import pandas as pd
 from openai import OpenAI
-from dotenv import load_dotenv
-
-load_dotenv()
 
 
 @st.cache_data(show_spinner=False)
-def build_county_summary(d: pd.DataFrame) -> dict:
+def build_county_summary(d) -> dict:
+    """
+    Create a compact, model-friendly summary across years for one county.
+    Expects columns: year, per_dem, per_gop, per_point_diff, total_votes
+    """
     d = d.sort_values("year")
     return {
         "years": d["year"].tolist(),
@@ -20,31 +20,32 @@ def build_county_summary(d: pd.DataFrame) -> dict:
     }
 
 
-def _get_openai_key():
-    key = os.getenv("OPENAI_API_KEY")
-    if key:
-        return key
-    try:
-        return st.secrets["OPENAI_API_KEY"]
-    except Exception:
-        return None
-
-
-def _client():
-    api_key = _get_openai_key()
+def _get_client() -> OpenAI | None:
+    api_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY", None)
     if not api_key:
         return None
     return OpenAI(api_key=api_key)
 
 
-def gpt_quick_insight(county: str, summary: dict) -> str:
-    client = _client()
-    if not client:
-        return "⚠️ AI insight disabled. Set OPENAI_API_KEY in your .env (local) or Streamlit secrets (deploy)."
+def _safe_json_load(s: str) -> dict:
+    return json.loads(s)
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 60)
+def cached_gpt_quick_insight_json(county_name: str, summary_json: str) -> str:
+    """
+    Cached for 1 hour. summary_json is a stable string key.
+    """
+    client = _get_client()
+    if client is None:
+        return "⚠️ Add `OPENAI_API_KEY` to Streamlit Secrets to enable AI insights."
+
+    summary = _safe_json_load(summary_json)
 
     prompt = f"""
-You are helping a newsroom build an election results tool.
-Write a concise, factual "Quick insight" for {county}, Texas using ONLY the numbers provided.
+You are helping a newsroom build an elections tool.
+
+Write a concise, factual “Quick insight” for {county_name} using ONLY the numbers provided.
 
 Data (2016, 2020, 2024):
 - Dem vote %: {summary["per_dem"]}
@@ -54,58 +55,48 @@ Data (2016, 2020, 2024):
 
 Rules:
 - 2–4 sentences max, then 2 bullet points titled "What to watch".
-- Use plain language for general readers.
+- Plain language for general readers.
 - Do not speculate about causes, demographics, or turnout drivers.
-- Do not mention the model or missing data.
-- Quantify shifts since 2016 when possible.
+- If describing a shift, quantify it.
 """
 
     resp = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": "You are a careful data-journalism assistant who never invents facts."},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": prompt.strip()},
         ],
         temperature=0.2,
     )
     return resp.choices[0].message.content.strip()
 
 
-def gpt_statewide_summary(state_stats: dict) -> str:
-    client = _client()
-    if not client:
-        return "⚠️ AI insight disabled. Set OPENAI_API_KEY in your .env (local) or Streamlit secrets (deploy)."
+@st.cache_data(show_spinner=False, ttl=60 * 60)
+def cached_gpt_statewide_summary_json(statewide_stats_json: str) -> str:
+    client = _get_client()
+    if client is None:
+        return "⚠️ Add `OPENAI_API_KEY` to Streamlit Secrets to enable AI insights."
+
+    stats = _safe_json_load(statewide_stats_json)
 
     prompt = f"""
-You are helping a newsroom summarize statewide election trends for Texas.
-Use ONLY the totals and percentages provided. Keep it factual and concise.
+You are helping a newsroom build an elections tool.
 
-Statewide stats:
-{json.dumps(state_stats, indent=2)}
+Write a short statewide summary for Texas using ONLY these totals:
+{json.dumps(stats, indent=2)}
 
 Rules:
-- 4–6 sentences max.
-- Then add 3 bullet points titled "Key takeaways".
-- Do not speculate about causes or demographics.
-- Use plain language for general readers.
+- 3–6 sentences max, then 2 bullet points titled "What to watch".
+- Do not speculate about causes.
+- If describing change across years, quantify it.
 """
 
     resp = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": "You are a careful data-journalism assistant who never invents facts."},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": prompt.strip()},
         ],
         temperature=0.2,
     )
     return resp.choices[0].message.content.strip()
-
-
-@st.cache_data(show_spinner=False)
-def cached_gpt_quick_insight_json(county: str, summary_json: str) -> str:
-    return gpt_quick_insight(county, json.loads(summary_json))
-
-
-@st.cache_data(show_spinner=False)
-def cached_gpt_statewide_summary_json(stats_json: str) -> str:
-    return gpt_statewide_summary(json.loads(stats_json))
