@@ -1,5 +1,4 @@
 import json
-import os
 import pandas as pd
 import streamlit as st
 import plotly.express as px
@@ -156,11 +155,7 @@ def load_and_standardize_tx() -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def load_tx_geojson(path: str):
-    """
-    Ensures:
-      - feature["id"] as 5-digit string FIPS
-      - feature["properties"]["geoid"] as 5-digit string FIPS
-    """
+    """Normalize GeoJSON ids so feature['id'] is 5-digit TX county FIPS."""
     with open(path, "r", encoding="utf-8") as f:
         geo = json.load(f)
 
@@ -182,16 +177,13 @@ def load_tx_geojson(path: str):
 
 
 # ----------------------------
-# Cache year slice + lookup (performance)
+# Cache year slice (performance)
 # ----------------------------
 @st.cache_data(show_spinner=False)
-def year_slice_and_lookup(df: pd.DataFrame, year: int):
+def year_slice(df: pd.DataFrame, year: int) -> pd.DataFrame:
     d = df[df["year"] == year].copy()
     d["county_fips"] = d["county_fips"].astype(str).str.zfill(5)
-    lookup = d.set_index("county_fips")[
-        ["per_dem", "per_gop", "per_point_diff", "total_votes", "county_name", "votes_dem", "votes_gop"]
-    ].to_dict("index")
-    return d, lookup
+    return d
 
 
 # ----------------------------
@@ -343,7 +335,6 @@ st.markdown(
 
 df = load_and_standardize_tx()
 
-# Session state
 if "selected_fips" not in st.session_state:
     st.session_state.selected_fips = None
 
@@ -364,7 +355,7 @@ use_ai = st.sidebar.checkbox("Enable AI insights", value=True)
 
 texas_snapshot_cards(df)
 
-# Load geojson
+# GeoJSON
 try:
     geo = load_tx_geojson(TX_GEOJSON_PATH)
 except FileNotFoundError:
@@ -374,13 +365,15 @@ except FileNotFoundError:
     )
     st.stop()
 
-# Cached year slice + lookup
-d_year, lookup = year_slice_and_lookup(df, year)
+# Year slice
+d_year = year_slice(df, year)
 
-# Selected county name
+# Selected name
 selected_name = "None"
-if st.session_state.selected_fips and st.session_state.selected_fips in lookup:
-    selected_name = lookup[st.session_state.selected_fips]["county_name"]
+if st.session_state.selected_fips:
+    sr = d_year[d_year["county_fips"] == st.session_state.selected_fips]
+    if not sr.empty:
+        selected_name = sr.iloc[0]["county_name"]
 
 # Scoreboard
 dem_wins = int((d_year["per_dem"] > d_year["per_gop"]).sum())
@@ -392,23 +385,33 @@ c2.metric("🟥 GOP counties", gop_wins)
 c3.metric("Selected county", selected_name)
 
 # ----------------------------
-# Map section (Winner/Margin/Votes) + hover + click
-# Winner mode has multiple traces, so we click using trace.locations[pn]
+# Map (robust hover + click)
 # ----------------------------
+hover_data_common = {
+    "per_dem": ":.1f",
+    "per_gop": ":.1f",
+    "per_point_diff": ":.1f",
+    "total_votes": ":,",
+    "county_fips": True,
+}
+
 if metric == "Winner (Red/Blue)":
-    d_year = d_year.copy()
-    d_year["winner"] = (d_year["per_dem"] > d_year["per_gop"]).map({True: "Democratic", False: "Republican"})
+    d_map = d_year.copy()
+    d_map["winner_code"] = (d_map["per_dem"] > d_map["per_gop"]).astype(int)  # 1=Dem, 0=GOP
 
     fig_map = px.choropleth(
-        d_year,
+        d_map,
         geojson=geo,
         locations="county_fips",
         featureidkey="id",
-        color="winner",
+        color="winner_code",
         hover_name="county_name",
-        color_discrete_map={"Democratic": "#2A71AE", "Republican": "#B82D35"},
-        category_orders={"winner": ["Democratic", "Republican"]},
+        hover_data={**hover_data_common, "winner_code": False},
+        custom_data=["county_fips"],  # << ensure county_fips is carried into points
+        color_continuous_scale=["#B82D35", "#2A71AE"],
+        range_color=(0, 1),
     )
+    fig_map.update_layout(coloraxis_showscale=False)
 
 elif metric == "Margin (Red↔Blue)":
     fig_map = px.choropleth(
@@ -418,6 +421,8 @@ elif metric == "Margin (Red↔Blue)":
         featureidkey="id",
         color="per_point_diff",
         hover_name="county_name",
+        hover_data=hover_data_common,
+        custom_data=["county_fips"],
         color_continuous_scale=["#2A71AE", "#BFDCEB", "#F7F7F7", "#FACCB4", "#B82D35"],
     )
     fig_map.update_layout(coloraxis=dict(cmid=0))
@@ -431,48 +436,34 @@ else:
         featureidkey="id",
         color="total_votes",
         hover_name="county_name",
+        hover_data=hover_data_common,
+        custom_data=["county_fips"],
     )
     fig_map.update_layout(coloraxis_colorbar=dict(title="Votes", len=0.75))
 
-# Per-trace hover + outline (fast enough; no AI calls here)
-for trace in fig_map.data:
-    if getattr(trace, "type", None) != "choropleth":
-        continue
+# Light outline
+fig_map.update_traces(marker_line_width=0.35, marker_line_color="white")
 
-    if trace.locations is None:
-        locs = []
-    else:
-        locs = [str(x).zfill(5) for x in list(trace.locations)]
-
-    per_trace_customdata = []
-    hovertext = []
-
-    for f in locs:
-        row = lookup.get(f)
-        if row:
-            per_trace_customdata.append(
-                [row["per_dem"], row["per_gop"], row["per_point_diff"], row["total_votes"], f]
-            )
-            hovertext.append(row["county_name"])
-        else:
-            per_trace_customdata.append([None, None, None, None, f])
-            hovertext.append("")
-
-    trace.customdata = per_trace_customdata
-    trace.hovertext = hovertext
-    trace.hovertemplate = (
+# IMPORTANT: force a hovertemplate that references customdata
+# This makes Plotly keep customdata on the points consistently.
+fig_map.update_traces(
+    hovertemplate=(
         "<b>%{hovertext}</b><br><br>"
-        "County FIPS: %{customdata[4]}<br>"
-        "Dem %: %{customdata[0]:.1f}<br>"
-        "GOP %: %{customdata[1]:.1f}<br>"
-        "Margin (GOP − DEM): %{customdata[2]:.1f}<br>"
-        "Total votes: %{customdata[3]:,.0f}"
+        "County FIPS: %{customdata[0]}<br>"
+        "Dem %: %{customdata[1]:.1f}<br>"
+        "GOP %: %{customdata[2]:.1f}<br>"
+        "Margin (GOP − DEM): %{customdata[3]:.1f}<br>"
+        "Total votes: %{customdata[4]:,.0f}"
         "<extra></extra>"
     )
+)
 
-    selected_fips = st.session_state.selected_fips
-    trace.marker.line.width = [2.2 if (selected_fips and f == selected_fips) else 0.35 for f in locs]
-    trace.marker.line.color = "white"
+# To match the hovertemplate fields above, pack customdata in this order:
+# [county_fips, per_dem, per_gop, per_point_diff, total_votes]
+# (still compact; 254 counties only)
+fig_map.update_traces(
+    customdata=d_year[["county_fips", "per_dem", "per_gop", "per_point_diff", "total_votes"]].to_numpy()
+)
 
 fig_map.update_geos(fitbounds="locations", visible=False)
 fig_map.update_layout(margin=dict(l=0, r=0, t=10, b=0), height=560)
@@ -485,21 +476,40 @@ clicked = plotly_events(
     key=f"tx_map_{metric}_{year}",
 )
 
-# Click selection (NO st.rerun)
+# Click selection (robust: customdata -> location -> pointNumber mapping)
 if clicked:
     ev = clicked[-1]
-    curve = ev.get("curveNumber", 0)
-    pn = ev.get("pointNumber", None)
 
-    if pn is not None and curve < len(fig_map.data):
-        trace = fig_map.data[curve]
-        if trace.locations is not None:
-            locs = list(trace.locations)
-            if 0 <= pn < len(locs):
-                loc = str(locs[pn]).zfill(5)
-                if loc in lookup and st.session_state.selected_fips != loc:
-                    st.session_state.selected_fips = loc
+    loc = None
 
+    # 1) Preferred: customdata[0] is county_fips
+    cd = ev.get("customdata")
+    if cd is not None:
+        # cd can be list or scalar depending on versions
+        if isinstance(cd, (list, tuple)) and len(cd) > 0:
+            loc = cd[0]
+        elif isinstance(cd, str):
+            loc = cd
+
+    # 2) Fallback: some versions provide "location"
+    if loc is None:
+        loc = ev.get("location")
+
+    # 3) Final fallback: use curveNumber + pointNumber into trace.locations
+    if loc is None:
+        curve = ev.get("curveNumber", 0)
+        pn = ev.get("pointNumber", None)
+        if pn is not None and curve < len(fig_map.data):
+            tr = fig_map.data[curve]
+            if getattr(tr, "locations", None) is not None:
+                locs = list(tr.locations)
+                if 0 <= pn < len(locs):
+                    loc = locs[pn]
+
+    if loc is not None:
+        loc = str(loc).split(".")[0].zfill(5)
+        if st.session_state.selected_fips != loc:
+            st.session_state.selected_fips = loc
 
 # ----------------------------
 # Bars + Insight region
@@ -507,7 +517,6 @@ if clicked:
 st.markdown("")
 _dark_panel_open()
 
-# Bar chart changes based on selection
 if st.session_state.selected_fips:
     render_county_bars(df, st.session_state.selected_fips, year)
 else:
@@ -515,14 +524,12 @@ else:
 
 st.markdown("<h3 style='margin:6px 0 0 0;'>Quick insight</h3>", unsafe_allow_html=True)
 
-# Insight changes based on selection
 if st.session_state.selected_fips:
     county_fips = st.session_state.selected_fips
     county_all_years = df[df["county_fips"] == county_fips].sort_values("year")
     county_name = county_all_years.iloc[0]["county_name"]
 
     if use_ai:
-        # AI is now explicit to avoid blocking/hanging
         if st.button("Generate AI insight", key=f"ai_{county_fips}_{year}"):
             summary = build_county_summary(county_all_years)
             summary_json = json.dumps(summary, sort_keys=True)
