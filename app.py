@@ -225,7 +225,7 @@ def make_statewide_stats(df: pd.DataFrame) -> Dict[str, Any]:
 # ----------------------------
 # Vote share bar (stacked horizontal)
 # ----------------------------
-def render_vote_share_bar(dem_votes: float, gop_votes: float, total_votes: float, title_html: str):
+def render_vote_share_bar(dem_votes: float, gop_votes: float, total_votes: float, title_html: str, key: str = "vsbar"):
     other_votes = max(0.0, total_votes - dem_votes - gop_votes)
     if not total_votes or total_votes <= 0:
         st.warning("No vote totals available.")
@@ -269,14 +269,15 @@ def render_vote_share_bar(dem_votes: float, gop_votes: float, total_votes: float
         yaxis=dict(visible=False),
         font=dict(size=18, color="white"),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=key)
 
 
 def render_statewide_bars(df: pd.DataFrame, year: int):
     d = df[df["year"] == year]
     title = f"<b>Two Parties. Texas's Vote.</b><br><span style='font-size:14px'>Texas vote share — {year}</span>"
     render_vote_share_bar(
-        float(d["votes_dem"].sum()), float(d["votes_gop"].sum()), float(d["total_votes"].sum()), title
+        float(d["votes_dem"].sum()), float(d["votes_gop"].sum()), float(d["total_votes"].sum()), title,
+        key=f"sw_bar_{year}",
     )
 
 
@@ -287,13 +288,16 @@ def render_county_bars(df: pd.DataFrame, county_fips: str, year: int):
         return
     row = d.iloc[0]
     title = f"<b>{row['county_name']} — Vote share</b><br><span style='font-size:14px'>{year}</span>"
-    render_vote_share_bar(float(row["votes_dem"]), float(row["votes_gop"]), float(row["total_votes"]), title)
+    render_vote_share_bar(
+        float(row["votes_dem"]), float(row["votes_gop"]), float(row["total_votes"]), title,
+        key=f"county_bar_{county_fips}_{year}",
+    )
 
 
 # ----------------------------
 # Trend line chart (all years for one county)
 # ----------------------------
-def render_trend_line(df: pd.DataFrame, county_fips: str):
+def render_trend_line(df: pd.DataFrame, county_fips: str, key: str = "trend"):
     d = df[df["county_fips"] == county_fips].sort_values("year")
     if d.empty or len(d) < 2:
         return
@@ -335,7 +339,7 @@ def render_trend_line(df: pd.DataFrame, county_fips: str):
         legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="left", x=0, font=dict(color="white")),
         font=dict(color="white"),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=key)
 
 
 # ----------------------------
@@ -387,7 +391,7 @@ def render_statewide_trend(df: pd.DataFrame):
         legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="left", x=0, font=dict(color="white")),
         font=dict(color="white"),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="sw_trend")
 
 
 # ----------------------------
@@ -449,9 +453,10 @@ def render_county_comparison(df: pd.DataFrame, year: int):
             row = d.iloc[0]
             title = f"<b>{county_name}</b><br><span style='font-size:13px'>{year}</span>"
             render_vote_share_bar(
-                float(row["votes_dem"]), float(row["votes_gop"]), float(row["total_votes"]), title
+                float(row["votes_dem"]), float(row["votes_gop"]), float(row["total_votes"]), title,
+                key=f"comp_bar_{county_name}_{year}",
             )
-            render_trend_line(df, str(row["county_fips"]).zfill(5))
+            render_trend_line(df, str(row["county_fips"]).zfill(5), key=f"comp_trend_{county_name}")
             _dark_panel_close()
 
 
@@ -696,7 +701,7 @@ county_name = county_all_years.iloc[0]["county_name"]
 _dark_panel_open()
 
 render_county_bars(df, county_fips, year)
-render_trend_line(df, county_fips)
+render_trend_line(df, county_fips, key=f"main_trend_{county_fips}")
 
 st.markdown("<h3 style='margin:6px 0 0 0;'>Quick insight</h3>", unsafe_allow_html=True)
 
