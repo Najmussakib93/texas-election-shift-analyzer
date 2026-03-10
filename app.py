@@ -322,10 +322,10 @@ def texas_snapshot_cards(df: pd.DataFrame):
     top_votes = d24.loc[d24["total_votes"].idxmax()]
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("🟦 DEM counties (2024)", dem_counties)
+    c1.metric("🟦 Dem counties (2024)", dem_counties)
     c2.metric("🟥 GOP counties (2024)", gop_counties)
-    c3.metric("Closest county (margin pts)", f"{closest['county_name']} ({closest['per_point_diff']:+.1f})")
-    c4.metric("Highest votes cast", f"{top_votes['county_name']} ({int(top_votes['total_votes']):,})")
+    c3.metric("Closest margin", closest["county_name"], f"{closest['per_point_diff']:+.1f} pts")
+    c4.metric("Highest turnout", top_votes["county_name"], f"{int(top_votes['total_votes']):,} votes")
 
 
 # ----------------------------
@@ -458,22 +458,22 @@ tooltip = {
     "html": """
     <div style="font-family: ui-sans-serif, system-ui; font-size: 13px;">
       <div style="font-weight: 800; font-size: 14px; margin-bottom: 6px;">
-        {properties.county_name}
+        {county_name}
       </div>
 
       <div style="margin-bottom: 8px;">
-        <span style="font-weight: 700;">Winner:</span> {properties.winner}<br/>
-        <span style="font-weight: 700;">FIPS:</span> {properties.county_fips}
+        <span style="font-weight: 700;">Winner:</span> {winner}<br/>
+        <span style="font-weight: 700;">FIPS:</span> {county_fips}
       </div>
 
       <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 6px 14px;">
-        <div><span style="font-weight:700;">Dem %:</span> {properties.per_dem}</div>
-        <div><span style="font-weight:700;">GOP %:</span> {properties.per_gop}</div>
+        <div><span style="font-weight:700;">Dem %:</span> {per_dem}</div>
+        <div><span style="font-weight:700;">GOP %:</span> {per_gop}</div>
         <div style="grid-column: 1 / -1;">
-          <span style="font-weight:700;">Margin (GOP − DEM):</span> {properties.per_point_diff}
+          <span style="font-weight:700;">Margin (GOP − DEM):</span> {per_point_diff}
         </div>
         <div style="grid-column: 1 / -1;">
-          <span style="font-weight:700;">Total votes:</span> {properties.total_votes}
+          <span style="font-weight:700;">Total votes:</span> {total_votes}
         </div>
       </div>
     </div>
