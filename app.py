@@ -470,14 +470,18 @@ def texas_snapshot_cards(df: pd.DataFrame, year: int):
     total = len(d)
     dem_counties = int((d["per_dem"] > d["per_gop"]).sum())
     gop_counties = int((d["per_gop"] >= d["per_dem"]).sum())
-    closest  = d.loc[d["per_point_diff"].abs().idxmin()]
-    top_votes = d.loc[d["total_votes"].idxmax()]
+    d_margin = d.dropna(subset=["per_point_diff"])
+    d_turnout = d.dropna(subset=["total_votes"])
+    closest  = d_margin.loc[d_margin["per_point_diff"].abs().idxmin()] if not d_margin.empty else None
+    top_votes = d_turnout.loc[d_turnout["total_votes"].idxmax()] if not d_turnout.empty else None
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric(f"Dem counties ({year})", f"{dem_counties} of {total}")
     c2.metric(f"GOP counties ({year})", f"{gop_counties} of {total}")
-    c3.metric(f"Closest margin — {closest['county_name']}", f"{closest['per_point_diff']:+.1f} pts")
-    c4.metric(f"Highest turnout — {top_votes['county_name']}", f"{int(top_votes['total_votes']):,} votes")
+    if closest is not None:
+        c3.metric(f"Closest margin — {closest['county_name']}", f"{closest['per_point_diff']:+.1f} pts")
+    if top_votes is not None:
+        c4.metric(f"Highest turnout — {top_votes['county_name']}", f"{int(top_votes['total_votes']):,} votes")
 
 
 # ----------------------------
@@ -486,28 +490,75 @@ def texas_snapshot_cards(df: pd.DataFrame, year: int):
 def render_map_legend(color_mode: str):
     if color_mode == "Winner":
         st.markdown(
-            """<div class='map-legend'>
-            <span><span class='legend-swatch' style='background:#2A71AE'></span>Democratic win</span>
-            <span><span class='legend-swatch' style='background:#B82D35'></span>Republican win</span>
-            </div>""",
+            """
+<div style="display:flex; gap:20px; align-items:center; padding:10px 14px;
+            background:rgba(255,255,255,0.05); border-radius:8px; margin-top:-4px;
+            font-size:0.83rem; color:rgba(255,255,255,0.8);">
+  <span style="font-weight:600; color:rgba(255,255,255,0.5); text-transform:uppercase;
+               letter-spacing:.06em; font-size:0.75rem;">Map key</span>
+  <span style="display:flex;align-items:center;gap:6px;">
+    <span style="width:18px;height:18px;border-radius:4px;background:#2A71AE;display:inline-block;"></span>
+    Democratic win
+  </span>
+  <span style="display:flex;align-items:center;gap:6px;">
+    <span style="width:18px;height:18px;border-radius:4px;background:#B82D35;display:inline-block;"></span>
+    Republican win
+  </span>
+</div>""",
             unsafe_allow_html=True,
         )
     elif color_mode == "Margin Intensity":
         st.markdown(
-            """<div class='map-legend'>
-            <span><span class='legend-swatch' style='background:#2A71AE'></span>Strong Dem (+50)</span>
-            <span><span class='legend-swatch' style='background:#c8dcf0'></span>Lean Dem</span>
-            <span><span class='legend-swatch' style='background:#f0c8c8'></span>Lean GOP</span>
-            <span><span class='legend-swatch' style='background:#B82D35'></span>Strong GOP (+50)</span>
-            </div>""",
+            """
+<div style="padding:10px 14px; background:rgba(255,255,255,0.05); border-radius:8px;
+            margin-top:-4px;">
+  <div style="font-weight:600; color:rgba(255,255,255,0.5); text-transform:uppercase;
+              letter-spacing:.06em; font-size:0.75rem; margin-bottom:6px;">
+    Map key — Margin Intensity
+  </div>
+  <div style="display:flex; align-items:center; gap:10px;">
+    <span style="font-size:0.8rem; color:rgba(255,255,255,0.75); white-space:nowrap;">
+      Strong Dem<br/><span style="font-size:0.72rem; color:rgba(255,255,255,0.45);">(+50 pts)</span>
+    </span>
+    <div style="flex:1; height:16px; border-radius:6px;
+                background: linear-gradient(to right, #2A71AE, #c8dcf0, #f5f5f5, #f0c8c8, #B82D35);
+                border: 1px solid rgba(255,255,255,0.1);">
+    </div>
+    <span style="font-size:0.8rem; color:rgba(255,255,255,0.75); white-space:nowrap; text-align:right;">
+      Strong GOP<br/><span style="font-size:0.72rem; color:rgba(255,255,255,0.45);">(+50 pts)</span>
+    </span>
+  </div>
+  <div style="display:flex; justify-content:center; margin-top:4px;">
+    <span style="font-size:0.75rem; color:rgba(255,255,255,0.4);">← Competitive (near 0) →</span>
+  </div>
+</div>""",
             unsafe_allow_html=True,
         )
     elif color_mode == "Turnout":
         st.markdown(
-            """<div class='map-legend'>
-            <span><span class='legend-swatch' style='background:#dcdceb'></span>Low turnout</span>
-            <span><span class='legend-swatch' style='background:#4b0082'></span>High turnout</span>
-            </div>""",
+            """
+<div style="padding:10px 14px; background:rgba(255,255,255,0.05); border-radius:8px;
+            margin-top:-4px;">
+  <div style="font-weight:600; color:rgba(255,255,255,0.5); text-transform:uppercase;
+              letter-spacing:.06em; font-size:0.75rem; margin-bottom:6px;">
+    Map key — Voter Turnout
+  </div>
+  <div style="display:flex; align-items:center; gap:10px;">
+    <span style="font-size:0.8rem; color:rgba(255,255,255,0.75); white-space:nowrap;">
+      Low turnout
+    </span>
+    <div style="flex:1; height:16px; border-radius:6px;
+                background: linear-gradient(to right, #dcdceb, #9b6bb5, #4b0082);
+                border: 1px solid rgba(255,255,255,0.1);">
+    </div>
+    <span style="font-size:0.8rem; color:rgba(255,255,255,0.75); white-space:nowrap;">
+      High turnout
+    </span>
+  </div>
+  <div style="display:flex; justify-content:center; margin-top:4px;">
+    <span style="font-size:0.75rem; color:rgba(255,255,255,0.4);">Relative to highest-turnout county in selected year</span>
+  </div>
+</div>""",
             unsafe_allow_html=True,
         )
 
