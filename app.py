@@ -175,7 +175,7 @@ def margin_rgba(margin: float, alpha: int = 200) -> list:
     per_point_diff = GOP% - DEM%.  Positive = GOP leads, negative = DEM leads.
     Gradient: deep red (strong GOP) → light pink → light blue → deep blue (strong DEM).
     """
-    t = max(-1.0, min(1.0, float(margin) / 50.0))
+    t = max(-1.0, min(1.0, float(margin) / 0.5))
     if t >= 0:
         # neutral light pink [240, 200, 200] → deep red [184, 45, 53]
         r = int(240 + t * (184 - 240))
@@ -518,14 +518,14 @@ def render_map_legend(color_mode: str):
   </div>
   <div style="display:flex; align-items:center; gap:10px;">
     <span style="font-size:0.8rem; color:rgba(255,255,255,0.75); white-space:nowrap;">
-      Strong Dem<br/><span style="font-size:0.72rem; color:rgba(255,255,255,0.45);">(+50 pts)</span>
+      Strong Dem<br/><span style="font-size:0.72rem; color:rgba(255,255,255,0.45);">(50%+ margin)</span>
     </span>
     <div style="flex:1; height:16px; border-radius:6px;
                 background: linear-gradient(to right, #2A71AE, #c8dcf0, #f5f5f5, #f0c8c8, #B82D35);
                 border: 1px solid rgba(255,255,255,0.1);">
     </div>
     <span style="font-size:0.8rem; color:rgba(255,255,255,0.75); white-space:nowrap; text-align:right;">
-      Strong GOP<br/><span style="font-size:0.72rem; color:rgba(255,255,255,0.45);">(+50 pts)</span>
+      Strong GOP<br/><span style="font-size:0.72rem; color:rgba(255,255,255,0.45);">(50%+ margin)</span>
     </span>
   </div>
   <div style="display:flex; justify-content:center; margin-top:4px;">
