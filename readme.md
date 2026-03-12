@@ -1,256 +1,117 @@
 # Texas Election Shift Analyzer
 
-Interactive AI-powered election analytics platform for Texas counties using geospatial visualization, multi-year election data, and GPT-generated insights.
+Interactive election analytics tool for exploring how Texas counties voted and shifted across the 2016, 2020, and 2024 U.S. Presidential Elections.
+
+**Live app:** [texas-election-shift-analyzer.streamlit.app](https://texas-election-shift-analyzer-cu6rxpaqgqcrteosuzvl7h.streamlit.app/)
 
 Built by [Najmus Sakib](https://github.com/Najmussakib93)
 
 ---
 
-## Live Overview
+## What It Does
 
-This project analyzes how voting patterns have shifted across Texas counties between the 2016, 2020, and 2024 U.S. Presidential Elections.
-
-Users can:
-
-• Explore an interactive county-level Texas map  
-• See which counties voted Democratic or Republican  
-• Compare vote share and turnout across election years  
-• Click any county to view detailed vote breakdown  
-• Generate AI-powered insights explaining political trends
-
-This project combines data engineering, geospatial analytics, interactive visualization, and LLM-powered analysis.
+- Renders a county-level Texas map with three color modes: winner (red/blue), margin intensity (gradient), and voter turnout
+- Lets users select any of the 254 Texas counties via dropdown to see a vote share breakdown and 2016–2024 trend line
+- Shows top political shifts ranked by the largest Democratic/Republican swings between any two election years
+- Compares any two counties side by side
+- Generates AI-powered insights per county using GPT-4o-mini (optional, requires OpenAI API key)
+- Displays a statewide GPT summary of Texas election trends across all three years
 
 ---
 
 ## Key Features
 
-### Interactive Texas County Map
+### Interactive County Map (Pydeck)
+- Powered by Pydeck's GeoJsonLayer for fast rendering across all 254 counties
+- Three color modes selectable directly above the map: Winner, Margin Intensity, Turnout
+- Hover tooltip shows county name, winner, Dem %, GOP %, margin, and total votes
+- City reference points (Houston, Dallas, Austin, etc.) overlaid as labeled markers
 
-• Fully interactive choropleth map using Plotly  
-• Counties colored by:
+### Snapshot Stats Bar
+- Four real-time metrics that update with the selected year: Democratic counties, Republican counties, closest-margin county, and highest-turnout county
+- All stats reflect the currently selected election year (2016, 2020, or 2024)
 
-- Winner (Red vs Blue)
-- Margin (vote difference)
-- Total votes (turnout)
+### County Analysis Panel
+- Horizontal stacked bar chart showing Dem/GOP/Other vote share for the selected county and year
+- Trend line chart tracking Democratic and Republican vote percentages across all three elections
 
-• Hover to view:
+### Top Political Shifts Table
+- Ranks all 254 counties by the size of their partisan swing between any two selected years
+- Shows starting Dem%, ending Dem%, point shift, and direction (toward Dem / toward GOP)
 
-- Democratic vote %
-- Republican vote %
-- Margin
-- Total votes
-
-• Click any county to update analysis dynamically
-
----
-
-### County-Level Vote Analysis
-
-When a county is selected:
-
-• Vote share stacked bar chart  
-• Total vote comparison  
-• Multi-year trend analysis  
-• Visual breakdown of Democratic vs Republican support
-
----
-
-### AI-Generated Political Insights (GPT-Powered)
-
-Uses OpenAI GPT to generate human-readable explanations such as:
-
-• Which direction the county shifted politically  
-• How strong the political trend is  
-• Comparison between elections  
-• Contextual explanation of voter behavior
-
-Falls back to statistical insight if AI is disabled.
-
----
-
-### Statewide Analytics
-
-Provides statewide election summaries including:
-
-• Number of Democratic counties  
-• Number of Republican counties  
-• Closest county by margin  
-• Highest turnout county
+### AI Insights (GPT-4o-mini)
+- Per-county insight: summarizes the county's political trajectory and flags what to watch
+- Statewide summary: GPT analysis of Texas-wide trends across 2016, 2020, and 2024
+- Both are cached (1-hour TTL) to avoid redundant API calls
+- Falls back to a static shift summary when AI is disabled
 
 ---
 
 ## Tech Stack
 
-### Core Technologies
-
-• Python  
-• Streamlit  
-• Pandas  
-• Plotly
-
-### Data & Geospatial
-
-• GeoJSON county boundaries  
-• County-level election datasets (2016, 2020, 2024)
-
-### AI Integration
-
-• OpenAI GPT-4  
-• JSON-based structured prompts  
-• Cached AI insight generation
-
-### Visualization
-
-• Plotly Choropleth maps  
-• Interactive stacked bar charts  
-• Real-time UI updates
+| Layer | Technology |
+|---|---|
+| App framework | Streamlit |
+| Map | Pydeck (GeoJsonLayer) |
+| Charts | Plotly (bar, stacked bar, line) |
+| Data processing | Pandas |
+| AI insights | OpenAI GPT-4o-mini |
+| Geospatial data | GeoJSON (Texas county boundaries) |
+| Deployment | Streamlit Cloud |
 
 ---
 
 ## Project Structure
 
+```
 texas-election-shift-analyzer/
-│
-├── app.py
-├── ai_insights.py
-├── create_texas_geojson.py
-│
+├── app.py                    # Main Streamlit app
+├── ai_insights.py            # GPT integration and county/statewide summaries
+├── create_texas_geojson.py   # Filters US GeoJSON to Texas-only features
 ├── data/
-│ ├── 2016.csv
-│ ├── 2020.csv
-│ ├── 2024.csv
-│ ├── texas_counties.geojson
-│
+│   ├── 2016.csv
+│   ├── 2020.csv
+│   ├── 2024.csv
+│   └── texas_counties.geojson
 ├── requirements.txt
-├── README.md
-├── .gitignore
+└── README.md
+```
 
 ---
 
-## Installation
+## Setup
 
-Clone the repository:
-
+```bash
 git clone https://github.com/Najmussakib93/texas-election-shift-analyzer.git
-
 cd texas-election-shift-analyzer
-
-Install dependencies:
-
 pip install -r requirements.txt
+```
 
-Run the application:
+For AI insights, set your OpenAI API key:
 
+```bash
+export OPENAI_API_KEY=your_key_here
+# or add it to .streamlit/secrets.toml as OPENAI_API_KEY = "your_key"
+```
+
+Run locally:
+
+```bash
 streamlit run app.py
+```
 
 ---
 
-## How It Works
+## Data Sources
 
-### Data Pipeline
-
-1. Load election datasets for 2016, 2020, 2024
-2. Standardize county FIPS codes
-3. Merge datasets into unified structure
-4. Connect election data with GeoJSON map
-
----
-
-### Map Interaction Flow
-
-User clicks county →  
-Plotly event captures county FIPS →  
-Streamlit session state updates →  
-Bar chart updates →  
-AI insight updates
-
----
-
-### AI Insight Pipeline
-
-County data →  
-Structured JSON summary →  
-GPT prompt generation →  
-Human-readable explanation
-
----
-
-## Example Use Cases
-
-This platform can be used for:
-
-• Political analysis  
-• Election trend analysis  
-• Data visualization portfolio projects  
-• Geospatial analytics demonstrations  
-• AI-powered analytics systems
-
----
-
-## Skills Demonstrated
-
-This project demonstrates real-world expertise in:
-
-Data Engineering
-• Data cleaning and transformation  
-• Multi-source dataset integration
-
-Data Analytics
-• Election trend analysis  
-• Statistical analysis
-
-Geospatial Analytics
-• GeoJSON processing  
-• Choropleth mapping
-
-Software Engineering
-• Interactive dashboard design  
-• Event-driven architecture
-
-AI Integration
-• GPT integration  
-• Prompt engineering  
-• Structured data → natural language
+- County-level presidential election results: 2016, 2020, 2024
+- Texas county GeoJSON boundaries derived from US Census TIGER/Line shapefiles
+- FIPS codes zero-padded to 5 digits; Texas state prefix is `48`
 
 ---
 
 ## Author
 
-Najmus Sakib
+**Najmus Sakib** — Data Analyst | Data Engineer
 
-Data Analyst | Data Engineer | AI Engineer
-
-GitHub:  
-https://github.com/Najmussakib93
-
-LinkedIn:  
-(Add your LinkedIn here)
-
----
-
-## Future Improvements
-
-• Nationwide election analysis  
-• Historical election data (2000-2024)  
-• Demographic overlays  
-• Turnout prediction model  
-• Advanced ML political shift modeling
-
----
-
-## Why This Project Matters
-
-This project demonstrates the ability to build a complete data analytics platform combining:
-
-• Data engineering  
-• Geospatial analytics  
-• Interactive visualization  
-• AI integration  
-• Production-level dashboard design
-
-This reflects real-world systems used by organizations such as:
-
-• Texas Tribune  
-• FiveThirtyEight  
-• New York Times  
-• Political analytics firms
+- GitHub: [github.com/Najmussakib93](https://github.com/Najmussakib93)
