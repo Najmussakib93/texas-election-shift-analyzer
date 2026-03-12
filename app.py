@@ -463,20 +463,21 @@ def render_county_comparison(df: pd.DataFrame, year: int):
 # ----------------------------
 # Snapshot cards
 # ----------------------------
-def texas_snapshot_cards(df: pd.DataFrame):
-    d24 = df[df["year"] == 2024].copy()
-    if d24.empty:
+def texas_snapshot_cards(df: pd.DataFrame, year: int):
+    d = df[df["year"] == year].copy()
+    if d.empty:
         return
-    dem_counties = int((d24["per_dem"] > d24["per_gop"]).sum())
-    gop_counties = int((d24["per_gop"] >= d24["per_dem"]).sum())
-    closest  = d24.loc[d24["per_point_diff"].abs().idxmin()]
-    top_votes = d24.loc[d24["total_votes"].idxmax()]
+    total = len(d)
+    dem_counties = int((d["per_dem"] > d["per_gop"]).sum())
+    gop_counties = int((d["per_gop"] >= d["per_dem"]).sum())
+    closest  = d.loc[d["per_point_diff"].abs().idxmin()]
+    top_votes = d.loc[d["total_votes"].idxmax()]
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("🟦 Dem counties (2024)", dem_counties)
-    c2.metric("🟥 GOP counties (2024)", gop_counties)
-    c3.metric("Closest margin", closest["county_name"], f"{closest['per_point_diff']:+.1f} pts")
-    c4.metric("Highest turnout", top_votes["county_name"], f"{int(top_votes['total_votes']):,} votes")
+    c1.metric(f"Dem counties ({year})", f"{dem_counties} of {total}")
+    c2.metric(f"GOP counties ({year})", f"{gop_counties} of {total}")
+    c3.metric(f"Closest margin — {closest['county_name']}", f"{closest['per_point_diff']:+.1f} pts")
+    c4.metric(f"Highest turnout — {top_votes['county_name']}", f"{int(top_votes['total_votes']):,} votes")
 
 
 # ----------------------------
@@ -521,7 +522,7 @@ st.markdown(
     """
 <div class="tt-card">
   <div class="tt-title">Texas Election Shift Analyzer</div>
-  <div class="tt-sub">Texas counties colored by winner. Hover for county stats. (Pydeck map for speed.)</div>
+  <div class="tt-sub">How Texas counties voted and shifted across three presidential elections — 2016, 2020, and 2024. Hover over a county for details.</div>
 </div>
 """,
     unsafe_allow_html=True,
@@ -536,18 +537,9 @@ if "selected_fips" not in st.session_state:
 # Sidebar
 st.sidebar.markdown("## Controls")
 year = st.sidebar.selectbox("Year", [2016, 2020, 2024], index=2)
-color_mode = st.sidebar.radio(
-    "Map color mode",
-    ["Winner", "Margin Intensity", "Turnout"],
-    index=0,
-    help="Winner: flat red/blue  |  Margin: gradient by vote gap  |  Turnout: shade by votes cast",
-)
 use_ai = st.sidebar.checkbox("Enable AI insights", value=True)
 
-if st.sidebar.button("Clear selected county"):
-    st.session_state.selected_fips = None
-
-texas_snapshot_cards(df)
+texas_snapshot_cards(df, year)
 
 # Load geojson
 try:
@@ -561,6 +553,15 @@ d_year, lookup = year_slice_and_lookup(df, year)
 
 # Max turnout for normalization (used only in Turnout mode)
 max_turnout = max((v["total_votes"] for v in lookup.values()), default=1)
+
+# Map color mode selector (inline, above map)
+color_mode = st.radio(
+    "Map color",
+    ["Winner", "Margin Intensity", "Turnout"],
+    index=0,
+    horizontal=True,
+    help="Winner: flat red/blue  |  Margin: gradient by vote gap  |  Turnout: shade by votes cast",
+)
 
 # ----------------------------
 # Build GeoJSON features with embedded stats + color
@@ -641,8 +642,7 @@ tooltip = {
     <div style="font-family: ui-sans-serif, system-ui; font-size: 13px;">
       <div style="font-weight: 800; font-size: 14px; margin-bottom: 6px;">{county_name}</div>
       <div style="margin-bottom: 8px;">
-        <span style="font-weight: 700;">Winner:</span> {winner}<br/>
-        <span style="font-weight: 700;">FIPS:</span> {county_fips}
+        <span style="font-weight: 700;">Winner:</span> {winner}
       </div>
       <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 6px 14px;">
         <div><span style="font-weight:700;">Dem %:</span> {per_dem}</div>
@@ -723,9 +723,17 @@ else:
 _dark_panel_close()
 
 # ----------------------------
+# Top political shifts
+# ----------------------------
+with st.expander("Top political shifts by county", expanded=True):
+    _dark_panel_open()
+    render_top_shifts(df)
+    _dark_panel_close()
+
+# ----------------------------
 # Statewide trend chart
 # ----------------------------
-with st.expander("Texas statewide vote share trend", expanded=True):
+with st.expander("Texas statewide vote share trend", expanded=False):
     _dark_panel_open()
     render_statewide_trend(df)
     _dark_panel_close()
@@ -735,14 +743,6 @@ with st.expander("Texas statewide vote share trend", expanded=True):
 # ----------------------------
 with st.expander("County comparison", expanded=False):
     render_county_comparison(df, year)
-
-# ----------------------------
-# Top political shifts
-# ----------------------------
-with st.expander("Top political shifts by county", expanded=False):
-    _dark_panel_open()
-    render_top_shifts(df)
-    _dark_panel_close()
 
 # ----------------------------
 # Statewide AI summary
