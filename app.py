@@ -1,10 +1,10 @@
 # app.py
 import json
-import os
 from typing import Dict, Any, Tuple
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 import plotly.graph_objects as go
 import pydeck as pdk
 
@@ -64,20 +64,6 @@ div[data-testid="stVerticalBlock"] { gap: 0.75rem; }
   padding:14px 14px 6px 14px;
 }
 .tt-dark h3, .tt-dark p, .tt-dark li { color: #fff; }
-
-.map-legend{
-  display:flex; gap:18px; align-items:center;
-  padding:8px 12px;
-  background:rgba(255,255,255,0.05);
-  border-radius:8px;
-  font-size:0.82rem;
-  color:rgba(255,255,255,0.75);
-  margin-top:-4px;
-}
-.legend-swatch{
-  display:inline-block; width:14px; height:14px;
-  border-radius:3px; margin-right:5px; vertical-align:middle;
-}
 
 header[data-testid="stHeader"] { background: rgba(2,6,23,0.0); }
 section[data-testid="stSidebar"] { background: #0b1220; }
@@ -272,26 +258,92 @@ def render_vote_share_bar(dem_votes: float, gop_votes: float, total_votes: float
     st.plotly_chart(fig, use_container_width=True, key=key)
 
 
-def render_statewide_bars(df: pd.DataFrame, year: int):
-    d = df[df["year"] == year]
-    title = f"<b>Two Parties. Texas's Vote.</b><br><span style='font-size:14px'>Texas vote share — {year}</span>"
-    render_vote_share_bar(
-        float(d["votes_dem"].sum()), float(d["votes_gop"].sum()), float(d["total_votes"].sum()), title,
-        key=f"sw_bar_{year}",
-    )
+def render_d3_county_bar(
+    votes_dem: float, votes_gop: float, total_votes: float, county_name: str, year: int
+):
+    """
+    Animated D3 v7 stacked vote-share bar for the selected county.
+    Rendered via st.components.v1.html inside an iframe.
+    """
+    other = max(0.0, total_votes - votes_dem - votes_gop)
+    dem_pct  = votes_dem  / total_votes * 100 if total_votes else 0
+    gop_pct  = votes_gop  / total_votes * 100 if total_votes else 0
+    oth_pct  = other      / total_votes * 100 if total_votes else 0
 
+    segments = [
+        {"label": "Democrats",   "pct": round(dem_pct, 2), "votes": int(votes_dem), "color": "#2A71AE"},
+        {"label": "Republicans", "pct": round(gop_pct, 2), "votes": int(votes_gop), "color": "#B82D35"},
+    ]
+    if oth_pct >= 0.5:
+        segments.append({"label": "Other", "pct": round(oth_pct, 2), "votes": int(other), "color": "#6B7280"})
 
-def render_county_bars(df: pd.DataFrame, county_fips: str, year: int):
-    d = df[(df["county_fips"] == county_fips) & (df["year"] == year)]
-    if d.empty:
-        st.warning("No data for this county/year.")
-        return
-    row = d.iloc[0]
-    title = f"<b>{row['county_name']} — Vote share</b><br><span style='font-size:14px'>{year}</span>"
-    render_vote_share_bar(
-        float(row["votes_dem"]), float(row["votes_gop"]), float(row["total_votes"]), title,
-        key=f"county_bar_{county_fips}_{year}",
-    )
+    seg_json = json.dumps(segments)
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ background: transparent; font-family: ui-sans-serif, system-ui, sans-serif; padding: 4px 0; }}
+  .chart-title {{ font-size: 14px; font-weight: 700; fill: white; }}
+  .bar-label  {{ font-size: 13px; font-weight: 700; fill: white; pointer-events: none; }}
+  .bar-sub    {{ font-size: 11px; fill: rgba(255,255,255,0.8); pointer-events: none; }}
+</style>
+</head>
+<body>
+<svg id="d3bar" width="100%" height="100"></svg>
+<script>
+(function() {{
+  const segments = {seg_json};
+  const county   = {json.dumps(county_name)};
+  const year     = {year};
+
+  const svgEl = document.getElementById("d3bar");
+  const W = Math.max(320, document.documentElement.clientWidth - 8);
+  const BAR_H = 44, Y0 = 40;
+
+  const svg = d3.select("#d3bar").attr("width", W).attr("height", Y0 + BAR_H + 12);
+  const x   = d3.scaleLinear().domain([0, 100]).range([0, W]);
+
+  // Title
+  svg.append("text").attr("class", "chart-title")
+    .attr("x", 0).attr("y", 18)
+    .text(`${{county}} — Vote share ${{year}}`);
+
+  // Animated bars
+  let offset = 0;
+  segments.forEach((d, i) => {{
+    const barX = x(offset);
+    svg.append("rect")
+      .attr("x", barX).attr("y", Y0)
+      .attr("height", BAR_H).attr("width", 0)
+      .attr("fill", d.color)
+      .transition().duration(700).delay(i * 120).ease(d3.easeCubicOut)
+      .attr("width", x(d.pct));
+
+    // Labels (appear after animation)
+    const cx = barX + x(d.pct) / 2;
+    if (x(d.pct) > 72) {{
+      setTimeout(() => {{
+        svg.append("text").attr("class", "bar-label")
+          .attr("x", cx).attr("y", Y0 + BAR_H / 2 - 5)
+          .attr("text-anchor", "middle")
+          .text(`${{d.pct.toFixed(1)}}%`);
+        svg.append("text").attr("class", "bar-sub")
+          .attr("x", cx).attr("y", Y0 + BAR_H / 2 + 12)
+          .attr("text-anchor", "middle")
+          .text(`${{d.votes.toLocaleString()}} votes`);
+      }}, 700 + i * 120);
+    }}
+    offset += d.pct;
+  }});
+}})();
+</script>
+</body>
+</html>"""
+    components.html(html, height=108)
 
 
 # ----------------------------
@@ -730,8 +782,6 @@ render_map_legend(color_mode)
 # ----------------------------
 # County selection + analysis
 # ----------------------------
-st.markdown("")
-
 counties = sorted(d_year["county_name"].unique().tolist())
 default_idx = 0
 if st.session_state.selected_fips and st.session_state.selected_fips in lookup:
@@ -751,7 +801,15 @@ county_name = county_all_years.iloc[0]["county_name"]
 # County analysis panel
 _dark_panel_open()
 
-render_county_bars(df, county_fips, year)
+# D3 animated vote-share bar (main panel)
+_county_row = df[(df["county_fips"] == county_fips) & (df["year"] == year)]
+if not _county_row.empty:
+    _r = _county_row.iloc[0]
+    render_d3_county_bar(
+        float(_r["votes_dem"]), float(_r["votes_gop"]), float(_r["total_votes"]),
+        str(_r["county_name"]), year,
+    )
+
 render_trend_line(df, county_fips, key=f"main_trend_{county_fips}")
 
 st.markdown("<h3 style='margin:6px 0 0 0;'>Quick insight</h3>", unsafe_allow_html=True)
